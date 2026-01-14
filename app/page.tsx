@@ -3,9 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 import * as ort from "onnxruntime-web";
 
+/** * CSS SECTION
+ * หากคุณใช้ Next.js แนะนำให้แยกส่วน @keyframes นี้ไปไว้ใน globals.css
+ * แต่ถ้าต้องการเทสทันที สามารถใส่ในแท็ก <style> ภายใน component ได้
+ */
+
 type CvType = any;
 
-// การกำหนดสีตามอารมณ์ที่คุณต้องการ
 const EMOTION_COLORS: Record<string, string> = {
   angry: "#FF4B4B",
   disgust: "#FFD700",
@@ -97,7 +101,6 @@ export default function Home() {
   // 4) Toggle Camera
   async function toggleCamera() {
     if (isCameraOn) {
-      // ปิดกล้อง
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
       }
@@ -107,7 +110,6 @@ export default function Home() {
       setIsCameraOn(false);
       setStatus("ปิดกล้องแล้ว");
     } else {
-      // เปิดกล้อง
       try {
         setStatus("กำลังเปิดกล้อง...");
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -152,7 +154,6 @@ export default function Home() {
     return scores.map((s) => s / sum);
   }
 
-  // 7) Main loop
   async function loop() {
     if (!videoRef.current || videoRef.current.paused || videoRef.current.ended)
       return;
@@ -222,7 +223,6 @@ export default function Home() {
         setEmotion(currentEmotion);
         setConf(currentConf);
 
-        // Drawing
         const color = EMOTION_COLORS[currentEmotion] || "#white";
         ctx.strokeStyle = color;
         ctx.lineWidth = 4;
@@ -270,8 +270,29 @@ export default function Home() {
   const themeColor = EMOTION_COLORS[emotion] || "#10B981";
 
   return (
-    <main className="min-h-screen bg-zinc-950 text-zinc-100 p-4 md:p-8 font-sans">
-      <div className="max-w-5xl mx-auto space-y-6">
+    <main className="min-h-screen bg-zinc-950 text-zinc-100 p-4 md:p-8 font-sans transition-colors duration-1000"
+          style={{ backgroundImage: `radial-gradient(circle at center, ${themeColor}10 0%, transparent 70%)` }}>
+
+      {/* Dynamic CSS for Scanning Line */}
+      <style jsx global>{`
+        @keyframes scan {
+          0% { transform: translateY(-10%); opacity: 0; }
+          50% { opacity: 1; }
+          100% { transform: translateY(1000%); opacity: 0; }
+        }
+        .animate-scan {
+          animation: scan 3s linear infinite;
+        }
+        @keyframes spin-slow {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        .animate-spin-slow {
+          animation: spin-slow 8s linear infinite;
+        }
+      `}</style>
+
+      <div className="max-w-7xl mx-auto space-y-6">
         {/* Header Section */}
         <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-zinc-900/50 p-6 rounded-2xl border border-zinc-800 backdrop-blur-md">
           <div>
@@ -279,9 +300,7 @@ export default function Home() {
               Face Emotion (NoName!!)
             </h1>
             <p className="text-zinc-400 text-sm mt-1 flex items-center gap-2">
-              <span
-                className={`w-2 h-2 rounded-full ${isModelReady ? "bg-green-500 animate-pulse" : "bg-red-500"}`}
-              ></span>
+              <span className={`w-2 h-2 rounded-full ${isModelReady ? "bg-green-500 animate-pulse" : "bg-red-500"}`}></span>
               {status}
             </p>
           </div>
@@ -300,69 +319,114 @@ export default function Home() {
         </header>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Main Viewport */}
+          {/* Main Viewport พร้อมลูกเล่นใหม่ */}
           <div
-            className="lg:col-span-2 relative aspect-video bg-black rounded-3xl overflow-hidden border-4 transition-colors duration-500"
-            style={{ borderColor: isCameraOn ? themeColor : "#27272a" }}
+            className="lg:col-span-2 relative aspect-[16/10] bg-black rounded-3xl overflow-hidden border-4 transition-all duration-700 ease-in-out"
+            style={{
+              borderColor: isCameraOn ? themeColor : "#27272a",
+              boxShadow: isCameraOn ? `0 0 40px ${themeColor}30` : 'none'
+            }}
           >
             <video ref={videoRef} className="hidden" playsInline />
             <canvas ref={canvasRef} className="w-full h-full object-cover" />
 
-            {!isCameraOn && (
-              <div className="absolute inset-0 flex items-center justify-center bg-zinc-900">
-                <p className="text-zinc-500 font-medium">Start Camera</p>
+            {/* แถบเส้นสแกน (Scanning Line) */}
+            {isCameraOn && (
+              <div className="absolute inset-0 pointer-events-none overflow-hidden z-10">
+                <div
+                  className="w-full h-[3px] shadow-[0_0_20px_rgba(255,255,255,0.8)] animate-scan"
+                  style={{
+                    background: `linear-gradient(to right, transparent, ${themeColor}, transparent)`,
+                  }}
+                ></div>
               </div>
             )}
 
-            {/* Overlay Emotion Badge */}
-            {isCameraOn && (
-              <div className="absolute top-4 right-4">
-                <div
-                  className="px-4 py-2 rounded-full blur-none border backdrop-blur-xl transition-all duration-500"
-                  style={{
-                    backgroundColor: `${themeColor}20`,
-                    borderColor: themeColor,
-                    color: themeColor,
-                  }}
-                >
-                  <span className="text-xs uppercase font-black tracking-widest mr-2 opacity-70">
-                    Detecting:
-                  </span>
-                  <span className="font-bold text-lg">
-                    {emotion.toUpperCase()}
-                  </span>
+            {!isCameraOn && (
+              <div className="absolute inset-0 flex items-center justify-center bg-zinc-900">
+                <div className="text-center">
+                  <div className="w-20 h-20 border-2 border-dashed border-zinc-700 rounded-full animate-spin-slow mx-auto mb-6 flex items-center justify-center">
+                    <div className="w-12 h-12 border-2 border-zinc-800 rounded-full"></div>
+                  </div>
+                  <p className="text-zinc-500 font-bold tracking-[0.3em] uppercase text-sm">System Ready</p>
                 </div>
               </div>
+            )}
+
+            {/* Overlay Emotion Badge (แบบปรับปรุงใหม่) */}
+            {isCameraOn && (
+              <>
+                <div className="absolute top-6 left-6 flex items-center gap-3 z-20">
+                  <div className="flex h-3 w-3 relative">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{backgroundColor: themeColor}}></span>
+                    <span className="relative inline-flex rounded-full h-3 w-3" style={{backgroundColor: themeColor}}></span>
+                  </div>
+                  <span className="text-xs font-bold tracking-[0.2em] text-white/80 uppercase drop-shadow-md">Neural Processing...</span>
+                </div>
+
+                <div className="absolute top-6 right-6 z-20">
+                  <div
+                    className="px-6 py-3 rounded-2xl border backdrop-blur-xl transition-all duration-500 shadow-2xl"
+                    style={{
+                      backgroundColor: `${themeColor}15`,
+                      borderColor: `${themeColor}50`,
+                      color: "white",
+                    }}
+                  >
+                    <span className="text-[10px] uppercase font-black tracking-widest block opacity-60 mb-1">
+                      Current State
+                    </span>
+                    <span className="font-mono text-2xl font-bold italic" style={{ color: themeColor }}>
+                      {emotion.toUpperCase()}
+                    </span>
+                  </div>
+                </div>
+              </>
             )}
           </div>
 
           {/* Stats & Info Card */}
           <div className="space-y-6">
-            <div className="bg-zinc-900/50 p-6 rounded-3xl border border-zinc-800">
-              <div className="space-y-4">
+            <div className="bg-zinc-900/50 p-8 rounded-3xl border border-zinc-800 h-full flex flex-col justify-between backdrop-blur-sm">
+              <div className="space-y-8">
                 <div>
-                  <div className="flex justify-between text-sm mb-2">
-                    <h2 className="text-zinc-400 text-xs font-black tracking-widest uppercase mb-4">
-                      Emotion Score
-                    </h2>
-                    <span className="font-mono" style={{ color: themeColor }}>
-                      {(conf * 100).toFixed(1)}%
-                    </span>
+                  <h2 className="text-zinc-500 text-xs font-black tracking-[0.2em] uppercase mb-6">
+                    Analysis Confidence
+                  </h2>
+                  <div className="relative pt-1">
+                    <div className="flex mb-2 items-center justify-between">
+                      <div>
+                        <span className="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full bg-zinc-800 text-zinc-300">
+                          Match Accuracy
+                        </span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-2xl font-mono font-bold" style={{ color: themeColor }}>
+                          {(conf * 100).toFixed(1)}%
+                        </span>
+                      </div>
+                    </div>
+                    
                   </div>
                 </div>
 
-                <div className="pt-4 border-t border-zinc-800">
-                  <div className="grid grid-cols-2 gap-2">
+                <div className="pt-8 border-t border-zinc-800/50">
+                  <h3 className="text-zinc-500 text-[10px] font-black tracking-widest uppercase mb-4">Class Distribution</h3>
+                  <div className="grid grid-cols-2 gap-3">
                     {Object.keys(EMOTION_COLORS).map((name) => (
                       <div
                         key={name}
-                        className={`flex items-center gap-2 p-2 rounded-lg text-xs font-medium transition-all ${emotion === name ? "bg-zinc-800 ring-1 ring-inset ring-zinc-700" : "opacity-40"}`}
+                        className={`flex items-center gap-3 p-3 rounded-xl text-xs font-bold transition-all duration-300 border ${
+                          emotion === name
+                            ? "bg-zinc-800 border-zinc-600 scale-105 shadow-lg"
+                            : "bg-transparent border-transparent opacity-30 grayscale"
+                        }`}
                       >
                         <span
-                          className="w-2 h-2 rounded-full"
-                          style={{ backgroundColor: EMOTION_COLORS[name] }}
+                          className="w-3 h-3 rounded-full shadow-[0_0_10px_currentColor]"
+                          style={{ backgroundColor: EMOTION_COLORS[name], color: EMOTION_COLORS[name] }}
                         ></span>
-                        {name.charAt(0).toUpperCase() + name.slice(1)}
+                        <span className="tracking-tight">{name.toUpperCase()}</span>
                       </div>
                     ))}
                   </div>

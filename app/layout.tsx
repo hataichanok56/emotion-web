@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Emotion AI Scanner",
+  title: "Face Emotion",
   description: "Real-time Neural Face Analysis",
 };
 

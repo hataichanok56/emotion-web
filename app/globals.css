@@ -27,3 +27,15 @@ body {
 .animate-in {
   animation: fade-in 0.6s ease-out forwards;
 }
+@keyframes scan {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(100vh); }
+}
+
+.animate-scan {
+  animation: scan 3s linear infinite;
+}
+
+.animate-spin-slow {
+  animation: spin 6s linear infinite;
+}
