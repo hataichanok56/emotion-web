@@ -72,7 +72,9 @@ export default function Home() {
     const res = await fetch("/opencv/haarcascade_frontalface_default.xml");
     const data = new Uint8Array(await res.arrayBuffer());
     const cascadePath = "haarcascade_frontalface_default.xml";
-    try { cv.FS_unlink(cascadePath); } catch {}
+    try {
+      cv.FS_unlink(cascadePath);
+    } catch {}
     cv.FS_createDataFile("/", cascadePath, data, true, false, false);
     const faceCascade = new cv.CascadeClassifier();
     faceCascade.load(cascadePath);
@@ -81,9 +83,12 @@ export default function Home() {
 
   // 3) Load Model
   async function loadModel() {
-    const session = await ort.InferenceSession.create("/models/emotion_yolo11n_cls.onnx", {
-      executionProviders: ["wasm"],
-    });
+    const session = await ort.InferenceSession.create(
+      "/models/emotion_yolo11n_cls.onnx",
+      {
+        executionProviders: ["wasm"],
+      },
+    );
     sessionRef.current = session;
     const clsRes = await fetch("/models/classes.json");
     classesRef.current = await clsRes.json();
@@ -94,7 +99,7 @@ export default function Home() {
     if (isCameraOn) {
       // ปิดกล้อง
       if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current.getTracks().forEach((track) => track.stop());
       }
       if (requestRef.current) {
         cancelAnimationFrame(requestRef.current);
@@ -149,7 +154,8 @@ export default function Home() {
 
   // 7) Main loop
   async function loop() {
-    if (!videoRef.current || videoRef.current.paused || videoRef.current.ended) return;
+    if (!videoRef.current || videoRef.current.paused || videoRef.current.ended)
+      return;
 
     try {
       const cv = cvRef.current;
@@ -184,15 +190,31 @@ export default function Home() {
         const faceCanvas = document.createElement("canvas");
         faceCanvas.width = bestRect.width;
         faceCanvas.height = bestRect.height;
-        faceCanvas.getContext("2d")!.drawImage(canvas, bestRect.x, bestRect.y, bestRect.width, bestRect.height, 0, 0, bestRect.width, bestRect.height);
+        faceCanvas
+          .getContext("2d")!
+          .drawImage(
+            canvas,
+            bestRect.x,
+            bestRect.y,
+            bestRect.width,
+            bestRect.height,
+            0,
+            0,
+            bestRect.width,
+            bestRect.height,
+          );
 
         const input = preprocessToTensor(faceCanvas);
         const feeds = { [sessionRef.current!.inputNames[0]]: input };
         const out = await sessionRef.current!.run(feeds);
-        const probs = softmax(out[sessionRef.current!.outputNames[0]].data as Float32Array);
+        const probs = softmax(
+          out[sessionRef.current!.outputNames[0]].data as Float32Array,
+        );
 
         let maxIdx = 0;
-        probs.forEach((p, i) => { if (p > probs[maxIdx]) maxIdx = i; });
+        probs.forEach((p, i) => {
+          if (p > probs[maxIdx]) maxIdx = i;
+        });
 
         const currentEmotion = classesRef.current![maxIdx];
         const currentConf = probs[maxIdx];
@@ -210,7 +232,11 @@ export default function Home() {
         ctx.fillRect(bestRect.x, bestRect.y - 35, 160, 35);
         ctx.fillStyle = "white";
         ctx.font = "bold 18px sans-serif";
-        ctx.fillText(`${currentEmotion.toUpperCase()} ${(currentConf * 100).toFixed(1)}%`, bestRect.x + 10, bestRect.y - 10);
+        ctx.fillText(
+          `${currentEmotion.toUpperCase()} ${(currentConf * 100).toFixed(1)}%`,
+          bestRect.x + 10,
+          bestRect.y - 10,
+        );
       }
 
       src.delete();
@@ -246,15 +272,16 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-100 p-4 md:p-8 font-sans">
       <div className="max-w-5xl mx-auto space-y-6">
-
         {/* Header Section */}
         <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-zinc-900/50 p-6 rounded-2xl border border-zinc-800 backdrop-blur-md">
           <div>
             <h1 className="text-3xl font-black tracking-tighter bg-gradient-to-r from-white to-zinc-500 bg-clip-text text-transparent">
-              EMOTION AI <span className="text-sm font-mono text-zinc-500 ml-2">v1.1</span>
+              Face Emotion (NoName!!)
             </h1>
             <p className="text-zinc-400 text-sm mt-1 flex items-center gap-2">
-              <span className={`w-2 h-2 rounded-full ${isModelReady ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
+              <span
+                className={`w-2 h-2 rounded-full ${isModelReady ? "bg-green-500 animate-pulse" : "bg-red-500"}`}
+              ></span>
               {status}
             </p>
           </div>
@@ -264,25 +291,26 @@ export default function Home() {
             disabled={!isModelReady}
             className={`px-8 py-3 rounded-xl font-bold transition-all active:scale-95 flex items-center justify-center gap-2 ${
               isCameraOn
-              ? "bg-red-500/10 text-red-500 border border-red-500/50 hover:bg-red-500 hover:text-white"
-              : "bg-white text-black hover:bg-zinc-200 disabled:opacity-50"
+                ? "bg-red-500/10 text-red-500 border border-red-500/50 hover:bg-red-500 hover:text-white"
+                : "bg-white text-black hover:bg-zinc-200 disabled:opacity-50"
             }`}
           >
-            {isCameraOn ? "Stop Camera" : "Start Real-time AI"}
+            {isCameraOn ? "◼️ Stop Camera" : " ▶ Start Camera "}
           </button>
         </header>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
           {/* Main Viewport */}
-          <div className="lg:col-span-2 relative aspect-video bg-black rounded-3xl overflow-hidden border-4 transition-colors duration-500"
-               style={{ borderColor: isCameraOn ? themeColor : '#27272a' }}>
+          <div
+            className="lg:col-span-2 relative aspect-video bg-black rounded-3xl overflow-hidden border-4 transition-colors duration-500"
+            style={{ borderColor: isCameraOn ? themeColor : "#27272a" }}
+          >
             <video ref={videoRef} className="hidden" playsInline />
             <canvas ref={canvasRef} className="w-full h-full object-cover" />
 
             {!isCameraOn && (
               <div className="absolute inset-0 flex items-center justify-center bg-zinc-900">
-                <p className="text-zinc-500 font-medium">กดปุ่ม Start เพื่อเริ่มใช้งานกล้อง</p>
+                <p className="text-zinc-500 font-medium">Start Camera</p>
               </div>
             )}
 
@@ -291,10 +319,18 @@ export default function Home() {
               <div className="absolute top-4 right-4">
                 <div
                   className="px-4 py-2 rounded-full blur-none border backdrop-blur-xl transition-all duration-500"
-                  style={{ backgroundColor: `${themeColor}20`, borderColor: themeColor, color: themeColor }}
+                  style={{
+                    backgroundColor: `${themeColor}20`,
+                    borderColor: themeColor,
+                    color: themeColor,
+                  }}
                 >
-                  <span className="text-xs uppercase font-black tracking-widest mr-2 opacity-70">Detecting:</span>
-                  <span className="font-bold text-lg">{emotion.toUpperCase()}</span>
+                  <span className="text-xs uppercase font-black tracking-widest mr-2 opacity-70">
+                    Detecting:
+                  </span>
+                  <span className="font-bold text-lg">
+                    {emotion.toUpperCase()}
+                  </span>
                 </div>
               </div>
             )}
@@ -303,18 +339,15 @@ export default function Home() {
           {/* Stats & Info Card */}
           <div className="space-y-6">
             <div className="bg-zinc-900/50 p-6 rounded-3xl border border-zinc-800">
-              <h2 className="text-zinc-400 text-xs font-black tracking-widest uppercase mb-4">Live Statistics</h2>
               <div className="space-y-4">
                 <div>
                   <div className="flex justify-between text-sm mb-2">
-                    <span className="text-zinc-500">Confidence Score</span>
-                    <span className="font-mono" style={{ color: themeColor }}>{(conf * 100).toFixed(1)}%</span>
-                  </div>
-                  <div className="w-full bg-zinc-800 h-3 rounded-full overflow-hidden">
-                    <div
-                      className="h-full transition-all duration-500"
-                      style={{ width: `${conf * 100}%`, backgroundColor: themeColor }}
-                    />
+                    <h2 className="text-zinc-400 text-xs font-black tracking-widest uppercase mb-4">
+                      Emotion Score
+                    </h2>
+                    <span className="font-mono" style={{ color: themeColor }}>
+                      {(conf * 100).toFixed(1)}%
+                    </span>
                   </div>
                 </div>
 
@@ -323,9 +356,12 @@ export default function Home() {
                     {Object.keys(EMOTION_COLORS).map((name) => (
                       <div
                         key={name}
-                        className={`flex items-center gap-2 p-2 rounded-lg text-xs font-medium transition-all ${emotion === name ? 'bg-zinc-800 ring-1 ring-inset ring-zinc-700' : 'opacity-40'}`}
+                        className={`flex items-center gap-2 p-2 rounded-lg text-xs font-medium transition-all ${emotion === name ? "bg-zinc-800 ring-1 ring-inset ring-zinc-700" : "opacity-40"}`}
                       >
-                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: EMOTION_COLORS[name] }}></span>
+                        <span
+                          className="w-2 h-2 rounded-full"
+                          style={{ backgroundColor: EMOTION_COLORS[name] }}
+                        ></span>
                         {name.charAt(0).toUpperCase() + name.slice(1)}
                       </div>
                     ))}
@@ -333,17 +369,7 @@ export default function Home() {
                 </div>
               </div>
             </div>
-
-            <div className="bg-zinc-900/50 p-6 rounded-3xl border border-zinc-800">
-              <h3 className="text-sm font-bold mb-2">Technical Guide</h3>
-              <ul className="text-xs text-zinc-500 space-y-2 list-disc pl-4">
-                <li>โมเดลถูกประมวลผลบน WebAssembly (WASM) โดยตรงบนเครื่องของคุณ</li>
-                <li>ใช้ Haar Cascade ในการตีกรอบหน้าก่อนส่งเข้า YOLO11-CLS</li>
-                <li>สีของกรอบจะเปลี่ยนไปตามอารมณ์ที่ AI คาดการณ์ได้แม่นยำที่สุด</li>
-              </ul>
-            </div>
           </div>
-
         </div>
       </div>
     </main>
