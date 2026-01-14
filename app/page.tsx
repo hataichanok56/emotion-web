@@ -3,240 +3,347 @@
 import { useEffect, useRef, useState } from "react";
 import * as ort from "onnxruntime-web";
 
-// 1. ตั้งค่า WASM Paths และปิด Proxy/Threads เพื่อเลี่ยงปัญหา SharedArrayBuffer
-if (typeof window !== 'undefined') {
-    ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.0/dist/";
-    ort.env.wasm.numThreads = 1; 
-    ort.env.wasm.proxy = false;
-}
+type CvType = any;
 
-type CapturedImage = {
-  id: number;
-  src: string;
-  emotion: string;
-  conf: number;
-  color: string;
-};
-
+// การกำหนดสีตามอารมณ์ที่คุณต้องการ
 const EMOTION_COLORS: Record<string, string> = {
-  angry: "#FF0000", disgust: "#FFFF00", fear: "#000000",
-  happy: "#FFC0CB", neutral: "#00FF00", sad: "#800080", surprise: "#FFA500",
+  angry: "#FF4B4B",
+  disgust: "#FFD700",
+  fear: "#9CA3AF",
+  happy: "#FFC0CB",
+  neutral: "#10B981",
+  sad: "#8B5CF6",
+  surprise: "#F59E0B",
 };
 
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const loopRef = useRef<number | null>(null);
+  const requestRef = useRef<number | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
-  const [status, setStatus] = useState("กำลังเตรียมระบบ...");
-  const [emotion, setEmotion] = useState("-");
-  const [conf, setConf] = useState(0);
-  const [isCameraOpen, setIsCameraOpen] = useState(false);
-  const [capturedImages, setCapturedImages] = useState<CapturedImage[]>([]);
+  const [status, setStatus] = useState<string>("กำลังเตรียมระบบ...");
+  const [emotion, setEmotion] = useState<string>("neutral");
+  const [conf, setConf] = useState<number>(0);
+  const [isCameraOn, setIsCameraOn] = useState<boolean>(false);
+  const [isModelReady, setIsModelReady] = useState<boolean>(false);
 
-  const cvRef = useRef<any>(null);
+  const cvRef = useRef<CvType | null>(null);
   const faceCascadeRef = useRef<any>(null);
   const sessionRef = useRef<ort.InferenceSession | null>(null);
   const classesRef = useRef<string[] | null>(null);
 
+  // 1) Load OpenCV.js
   async function loadOpenCV() {
-    if (typeof window === "undefined" || (window as any).cv?.Mat) {
+    if (typeof window === "undefined") return;
+    if ((window as any).cv?.Mat) {
       cvRef.current = (window as any).cv;
       return;
     }
+
     await new Promise<void>((resolve, reject) => {
       const script = document.createElement("script");
       script.src = "/opencv/opencv.js";
       script.async = true;
       script.onload = () => {
-        const checkReady = () => {
-          if ((window as any).cv?.Mat) {
-            cvRef.current = (window as any).cv;
+        const cv = (window as any).cv;
+        const waitReady = () => {
+          if (cv?.Mat) {
+            cvRef.current = cv;
             resolve();
-          } else { setTimeout(checkReady, 50); }
+          } else {
+            setTimeout(waitReady, 50);
+          }
         };
-        checkReady();
+        if ("onRuntimeInitialized" in cv) {
+          cv.onRuntimeInitialized = () => waitReady();
+        } else {
+          waitReady();
+        }
       };
       script.onerror = () => reject(new Error("โหลด OpenCV ไม่สำเร็จ"));
       document.body.appendChild(script);
     });
   }
 
-  async function initAssets() {
-    try {
-      await loadOpenCV();
-      const cv = cvRef.current;
-      const res = await fetch("/opencv/haarcascade_frontalface_default.xml");
-      const data = new Uint8Array(await res.arrayBuffer());
-      cv.FS_createDataFile("/", "face.xml", data, true, false, false);
-      const faceCascade = new cv.CascadeClassifier();
-      faceCascade.load("face.xml");
-      faceCascadeRef.current = faceCascade;
-
-      sessionRef.current = await ort.InferenceSession.create("/models/emotion_yolo11n_cls.onnx", { 
-        executionProviders: ["wasm"] 
-      });
-      const clsRes = await fetch("/models/classes.json");
-      classesRef.current = await clsRes.json();
-      setStatus("พร้อมใช้งาน");
-    } catch (e: any) { setStatus(`ผิดพลาด: ${e.message}`); }
+  // 2) Load Cascade
+  async function loadCascade() {
+    const cv = cvRef.current;
+    const res = await fetch("/opencv/haarcascade_frontalface_default.xml");
+    const data = new Uint8Array(await res.arrayBuffer());
+    const cascadePath = "haarcascade_frontalface_default.xml";
+    try { cv.FS_unlink(cascadePath); } catch {}
+    cv.FS_createDataFile("/", cascadePath, data, true, false, false);
+    const faceCascade = new cv.CascadeClassifier();
+    faceCascade.load(cascadePath);
+    faceCascadeRef.current = faceCascade;
   }
 
-  useEffect(() => { initAssets(); }, []);
+  // 3) Load Model
+  async function loadModel() {
+    const session = await ort.InferenceSession.create("/models/emotion_yolo11n_cls.onnx", {
+      executionProviders: ["wasm"],
+    });
+    sessionRef.current = session;
+    const clsRes = await fetch("/models/classes.json");
+    classesRef.current = await clsRes.json();
+  }
 
+  // 4) Toggle Camera
   async function toggleCamera() {
-    if (isCameraOpen) {
-      if (videoRef.current?.srcObject) {
-        (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
-        videoRef.current.srcObject = null;
+    if (isCameraOn) {
+      // ปิดกล้อง
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
       }
-      if (loopRef.current) cancelAnimationFrame(loopRef.current);
-      setIsCameraOpen(false);
+      if (requestRef.current) {
+        cancelAnimationFrame(requestRef.current);
+      }
+      setIsCameraOn(false);
       setStatus("ปิดกล้องแล้ว");
     } else {
+      // เปิดกล้อง
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
+        setStatus("กำลังเปิดกล้อง...");
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user" },
+          audio: false,
+        });
+        streamRef.current = stream;
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          videoRef.current.onloadedmetadata = () => {
-            videoRef.current?.play();
-            setIsCameraOpen(true);
-            setStatus("กำลังสแกน...");
-            loopRef.current = requestAnimationFrame(loop);
-          };
+          await videoRef.current.play();
+          setIsCameraOn(true);
+          setStatus("กำลังประมวลผล...");
+          requestRef.current = requestAnimationFrame(loop);
         }
-      } catch { setStatus("เข้าถึงกล้องไม่ได้"); }
+      } catch (err) {
+        setStatus("ไม่สามารถเข้าถึงกล้องได้");
+      }
     }
   }
 
-  const capturePhoto = () => {
-    if (capturedImages.length >= 5 || !canvasRef.current) return;
-    setCapturedImages([{
-      id: Date.now(),
-      src: canvasRef.current.toDataURL("image/png"),
-      emotion, conf,
-      color: EMOTION_COLORS[emotion.toLowerCase()] || "#FFFFFF"
-    }, ...capturedImages]);
-  };
-
-  async function loop() {
-    if (!videoRef.current || !canvasRef.current || !isCameraOpen) return;
-    
-    // *** แก้ปัญหา Width 0: ต้องเช็ค readyState และ videoWidth ก่อนทำงาน ***
-    if (videoRef.current.readyState < 2 || videoRef.current.videoWidth === 0) {
-      loopRef.current = requestAnimationFrame(loop);
-      return;
+  function preprocessToTensor(faceCanvas: HTMLCanvasElement) {
+    const size = 64;
+    const tmp = document.createElement("canvas");
+    tmp.width = size;
+    tmp.height = size;
+    const ctx = tmp.getContext("2d")!;
+    ctx.drawImage(faceCanvas, 0, 0, size, size);
+    const imgData = ctx.getImageData(0, 0, size, size).data;
+    const float = new Float32Array(1 * 3 * size * size);
+    for (let c = 0; c < 3; c++) {
+      for (let i = 0; i < size * size; i++) {
+        float[c * size * size + i] = imgData[i * 4 + c] / 255.0;
+      }
     }
+    return new ort.Tensor("float32", float, [1, 3, size, size]);
+  }
 
-    const cv = cvRef.current;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
-    canvas.width = videoRef.current.videoWidth;
-    canvas.height = videoRef.current.videoHeight;
-    ctx.drawImage(videoRef.current, 0, 0);
+  function softmax(logits: Float32Array) {
+    const maxLogit = Math.max(...Array.from(logits));
+    const scores = logits.map((l) => Math.exp(l - maxLogit));
+    const sum = scores.reduce((a, b) => a + b, 0);
+    return scores.map((s) => s / sum);
+  }
+
+  // 7) Main loop
+  async function loop() {
+    if (!videoRef.current || videoRef.current.paused || videoRef.current.ended) return;
 
     try {
+      const cv = cvRef.current;
+      const canvas = canvasRef.current;
+      const video = videoRef.current;
+      if (!cv || !canvas || !video) return;
+
+      const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0);
+
       const src = cv.imread(canvas);
       const gray = new cv.Mat();
       cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+
       const faces = new cv.RectVector();
       faceCascadeRef.current.detectMultiScale(gray, faces, 1.1, 3, 0);
 
-      if (faces.size() > 0) {
-        const r = faces.get(0);
-        const faceCanvas = document.createElement("canvas");
-        faceCanvas.width = r.width; faceCanvas.height = r.height;
-        faceCanvas.getContext("2d")!.drawImage(canvas, r.x, r.y, r.width, r.height, 0, 0, r.width, r.height);
+      let bestRect = null;
+      let maxArea = 0;
 
-        const size = 64;
-        const tmp = document.createElement("canvas");
-        tmp.width = size; tmp.height = size;
-        tmp.getContext("2d")!.drawImage(faceCanvas, 0, 0, size, size);
-        const imgData = tmp.getContext("2d")!.getImageData(0, 0, size, size).data;
-        const float = new Float32Array(3 * size * size);
-        for (let c = 0; c < 3; c++) {
-          for (let i = 0; i < size * size; i++) float[c * size * size + i] = imgData[i * 4 + c] / 255;
+      for (let i = 0; i < faces.size(); i++) {
+        const r = faces.get(i);
+        if (r.width * r.height > maxArea) {
+          maxArea = r.width * r.height;
+          bestRect = r;
         }
-        
-        const input = new ort.Tensor("float32", float, [1, 3, size, size]);
-        const out = await sessionRef.current!.run({ [sessionRef.current!.inputNames[0]]: input });
-        
-        // *** แก้ปัญหา t.getValue: ใช้ .data แทนการเรียก function ***
-        const logits = out[sessionRef.current!.outputNames[0]].data as Float32Array;
-        const exps = logits.map(v => Math.exp(v - Math.max(...Array.from(logits))));
-        const sumExps = exps.reduce((a, b) => a + b, 0);
-        const probs = exps.map(v => v / sumExps);
-        
-        let maxIdx = 0;
-        for (let i = 1; i < probs.length; i++) { if (probs[i] > probs[maxIdx]) maxIdx = i; }
-        
-        const detEmo = classesRef.current![maxIdx];
-        setEmotion(detEmo); setConf(probs[maxIdx]);
-
-        const color = EMOTION_COLORS[detEmo.toLowerCase()] || "#FFFFFF";
-        ctx.strokeStyle = color; ctx.lineWidth = 5;
-        ctx.strokeRect(r.x, r.y, r.width, r.height);
-        ctx.fillStyle = color; ctx.fillRect(r.x, r.y - 35, 160, 35);
-        ctx.fillStyle = (color === "#FFFF00" || color === "#FFC0CB") ? "black" : "white";
-        ctx.font = "bold 20px sans-serif";
-        ctx.fillText(`${detEmo} ${(probs[maxIdx]*100).toFixed(0)}%`, r.x + 8, r.y - 10);
       }
-      src.delete(); gray.delete(); faces.delete();
-    } catch (e) { console.error("Inference Error:", e); }
-    loopRef.current = requestAnimationFrame(loop);
+
+      if (bestRect) {
+        const faceCanvas = document.createElement("canvas");
+        faceCanvas.width = bestRect.width;
+        faceCanvas.height = bestRect.height;
+        faceCanvas.getContext("2d")!.drawImage(canvas, bestRect.x, bestRect.y, bestRect.width, bestRect.height, 0, 0, bestRect.width, bestRect.height);
+
+        const input = preprocessToTensor(faceCanvas);
+        const feeds = { [sessionRef.current!.inputNames[0]]: input };
+        const out = await sessionRef.current!.run(feeds);
+        const probs = softmax(out[sessionRef.current!.outputNames[0]].data as Float32Array);
+
+        let maxIdx = 0;
+        probs.forEach((p, i) => { if (p > probs[maxIdx]) maxIdx = i; });
+
+        const currentEmotion = classesRef.current![maxIdx];
+        const currentConf = probs[maxIdx];
+
+        setEmotion(currentEmotion);
+        setConf(currentConf);
+
+        // Drawing
+        const color = EMOTION_COLORS[currentEmotion] || "#white";
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 4;
+        ctx.strokeRect(bestRect.x, bestRect.y, bestRect.width, bestRect.height);
+
+        ctx.fillStyle = color;
+        ctx.fillRect(bestRect.x, bestRect.y - 35, 160, 35);
+        ctx.fillStyle = "white";
+        ctx.font = "bold 18px sans-serif";
+        ctx.fillText(`${currentEmotion.toUpperCase()} ${(currentConf * 100).toFixed(1)}%`, bestRect.x + 10, bestRect.y - 10);
+      }
+
+      src.delete();
+      gray.delete();
+      faces.delete();
+
+      requestRef.current = requestAnimationFrame(loop);
+    } catch (e) {
+      console.error(e);
+      requestRef.current = requestAnimationFrame(loop);
+    }
   }
 
-  return (
-    <main className="min-h-screen bg-zinc-950 text-white p-4 md:p-10 flex flex-col md:flex-row gap-10">
-      <div className="w-full md:w-80 flex flex-col gap-4">
-        <div className="flex justify-between items-center border-b border-zinc-800 pb-4">
-          <h2 className="text-xl font-black italic tracking-tighter">GALLERY ({capturedImages.length}/5)</h2>
-          <button onClick={() => setCapturedImages([])} className="text-[10px] bg-red-600 px-3 py-1 rounded-full font-bold uppercase hover:bg-red-500">Reset</button>
-        </div>
-        <div className="flex flex-col gap-4 overflow-y-auto max-h-[75vh] custom-scrollbar pr-2">
-          {capturedImages.map(img => (
-            <div key={img.id} className="bg-zinc-900 rounded-2xl overflow-hidden border-l-[6px] shadow-2xl animate-in slide-in-from-left duration-500" style={{ borderColor: img.color }}>
-              <img src={img.src} className="w-full h-36 object-cover" alt="Captured" />
-              <div className="p-3 flex justify-between items-center bg-zinc-900/80 backdrop-blur">
-                <span className="font-black text-xs uppercase" style={{ color: img.color }}>{img.emotion}</span>
-                <span className="text-[10px] bg-zinc-800 px-2 py-1 rounded-md">{(img.conf * 100).toFixed(0)}%</span>
-              </div>
-            </div>
-          ))}
-          {capturedImages.length === 0 && <div className="h-40 border-2 border-dashed border-zinc-800 rounded-3xl flex items-center justify-center text-zinc-600 font-bold italic">EMPTY SLOTS</div>}
-        </div>
-      </div>
+  useEffect(() => {
+    (async () => {
+      try {
+        await loadOpenCV();
+        await loadCascade();
+        await loadModel();
+        setIsModelReady(true);
+        setStatus("ระบบพร้อมใช้งาน");
+      } catch (e) {
+        setStatus("โหลดไม่สำเร็จ: " + e);
+      }
+    })();
+    return () => {
+      if (requestRef.current) cancelAnimationFrame(requestRef.current);
+    };
+  }, []);
 
-      <div className="flex-1 flex flex-col items-center">
-        <div className="relative w-full max-w-4xl aspect-video bg-zinc-900 rounded-[3rem] overflow-hidden border-8 border-zinc-900 shadow-[0_0_50px_rgba(0,0,0,0.5)]">
-          <video ref={videoRef} className="hidden" playsInline muted />
-          <canvas ref={canvasRef} className={`w-full h-full object-cover transition-opacity duration-700 ${!isCameraOpen ? 'opacity-0' : 'opacity-100'}`} />
-          {!isCameraOpen && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-950">
-              <div className="w-24 h-24 bg-zinc-900 rounded-full flex items-center justify-center mb-6 shadow-inner animate-pulse">
-                 <span className="text-5xl">📸</span>
-              </div>
-              <p className="text-zinc-600 font-black tracking-widest uppercase text-sm">Waiting for connection...</p>
-            </div>
-          )}
-          {isCameraOpen && (
-            <button onClick={capturePhoto} disabled={capturedImages.length >= 5} className="absolute bottom-10 right-10 w-24 h-24 bg-white/10 backdrop-blur-xl border-4 border-white/50 rounded-full flex items-center justify-center hover:scale-110 active:scale-90 transition-all shadow-2xl disabled:opacity-10 group">
-              <div className="w-16 h-16 bg-white rounded-full group-hover:bg-zinc-200 shadow-lg" />
-            </button>
-          )}
-        </div>
-        <div className="mt-12 flex flex-col items-center gap-6">
-          <button onClick={toggleCamera} className={`w-28 h-28 rounded-full flex items-center justify-center shadow-2xl transition-all hover:rotate-12 active:scale-90 ${isCameraOpen ? 'bg-red-600' : 'bg-emerald-500'}`}>
-            {isCameraOpen ? (
-              <div className="w-10 h-10 bg-white rounded-xl shadow-lg" />
-            ) : (
-              <div className="w-0 h-0 border-t-[22px] border-t-transparent border-l-[38px] border-l-white border-b-[22px] border-b-transparent ml-2 drop-shadow-lg" />
-            )}
-          </button>
-          <div className="text-center">
-            <h3 className="text-zinc-500 font-black text-[10px] tracking-[0.5em] uppercase mb-1">System Status</h3>
-            <p className="text-zinc-300 font-bold italic">{status}</p>
+  const themeColor = EMOTION_COLORS[emotion] || "#10B981";
+
+  return (
+    <main className="min-h-screen bg-zinc-950 text-zinc-100 p-4 md:p-8 font-sans">
+      <div className="max-w-5xl mx-auto space-y-6">
+
+        {/* Header Section */}
+        <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-zinc-900/50 p-6 rounded-2xl border border-zinc-800 backdrop-blur-md">
+          <div>
+            <h1 className="text-3xl font-black tracking-tighter bg-gradient-to-r from-white to-zinc-500 bg-clip-text text-transparent">
+              EMOTION AI <span className="text-sm font-mono text-zinc-500 ml-2">v1.1</span>
+            </h1>
+            <p className="text-zinc-400 text-sm mt-1 flex items-center gap-2">
+              <span className={`w-2 h-2 rounded-full ${isModelReady ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
+              {status}
+            </p>
           </div>
+
+          <button
+            onClick={toggleCamera}
+            disabled={!isModelReady}
+            className={`px-8 py-3 rounded-xl font-bold transition-all active:scale-95 flex items-center justify-center gap-2 ${
+              isCameraOn
+              ? "bg-red-500/10 text-red-500 border border-red-500/50 hover:bg-red-500 hover:text-white"
+              : "bg-white text-black hover:bg-zinc-200 disabled:opacity-50"
+            }`}
+          >
+            {isCameraOn ? "Stop Camera" : "Start Real-time AI"}
+          </button>
+        </header>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+          {/* Main Viewport */}
+          <div className="lg:col-span-2 relative aspect-video bg-black rounded-3xl overflow-hidden border-4 transition-colors duration-500"
+               style={{ borderColor: isCameraOn ? themeColor : '#27272a' }}>
+            <video ref={videoRef} className="hidden" playsInline />
+            <canvas ref={canvasRef} className="w-full h-full object-cover" />
+
+            {!isCameraOn && (
+              <div className="absolute inset-0 flex items-center justify-center bg-zinc-900">
+                <p className="text-zinc-500 font-medium">กดปุ่ม Start เพื่อเริ่มใช้งานกล้อง</p>
+              </div>
+            )}
+
+            {/* Overlay Emotion Badge */}
+            {isCameraOn && (
+              <div className="absolute top-4 right-4">
+                <div
+                  className="px-4 py-2 rounded-full blur-none border backdrop-blur-xl transition-all duration-500"
+                  style={{ backgroundColor: `${themeColor}20`, borderColor: themeColor, color: themeColor }}
+                >
+                  <span className="text-xs uppercase font-black tracking-widest mr-2 opacity-70">Detecting:</span>
+                  <span className="font-bold text-lg">{emotion.toUpperCase()}</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Stats & Info Card */}
+          <div className="space-y-6">
+            <div className="bg-zinc-900/50 p-6 rounded-3xl border border-zinc-800">
+              <h2 className="text-zinc-400 text-xs font-black tracking-widest uppercase mb-4">Live Statistics</h2>
+              <div className="space-y-4">
+                <div>
+                  <div className="flex justify-between text-sm mb-2">
+                    <span className="text-zinc-500">Confidence Score</span>
+                    <span className="font-mono" style={{ color: themeColor }}>{(conf * 100).toFixed(1)}%</span>
+                  </div>
+                  <div className="w-full bg-zinc-800 h-3 rounded-full overflow-hidden">
+                    <div
+                      className="h-full transition-all duration-500"
+                      style={{ width: `${conf * 100}%`, backgroundColor: themeColor }}
+                    />
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t border-zinc-800">
+                  <div className="grid grid-cols-2 gap-2">
+                    {Object.keys(EMOTION_COLORS).map((name) => (
+                      <div
+                        key={name}
+                        className={`flex items-center gap-2 p-2 rounded-lg text-xs font-medium transition-all ${emotion === name ? 'bg-zinc-800 ring-1 ring-inset ring-zinc-700' : 'opacity-40'}`}
+                      >
+                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: EMOTION_COLORS[name] }}></span>
+                        {name.charAt(0).toUpperCase() + name.slice(1)}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-zinc-900/50 p-6 rounded-3xl border border-zinc-800">
+              <h3 className="text-sm font-bold mb-2">Technical Guide</h3>
+              <ul className="text-xs text-zinc-500 space-y-2 list-disc pl-4">
+                <li>โมเดลถูกประมวลผลบน WebAssembly (WASM) โดยตรงบนเครื่องของคุณ</li>
+                <li>ใช้ Haar Cascade ในการตีกรอบหน้าก่อนส่งเข้า YOLO11-CLS</li>
+                <li>สีของกรอบจะเปลี่ยนไปตามอารมณ์ที่ AI คาดการณ์ได้แม่นยำที่สุด</li>
+              </ul>
+            </div>
+          </div>
+
         </div>
       </div>
     </main>
